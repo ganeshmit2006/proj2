@@ -1,4 +1,7 @@
 import os
+import subprocess
+from pathlib import Path
+from playwright.async_api import async_playwright
 import traceback
 import json
 import re
@@ -130,7 +133,19 @@ def extract_page_text(html):
     # Optionally only grab largest visible block or main section here
     return text
 
+PLAYWRIGHT_BROWSERS_PATH = Path.home() / ".cache/ms-playwright"
+
+async def ensure_playwright_browsers_installed():
+    # Check if Chromium headless shell executable exists already
+    chromium_path = PLAYWRIGHT_BROWSERS_PATH / "chromium_headless_shell-1181" / "chrome-linux" / "headless_shell"
+    if not chromium_path.exists():
+        print("Playwright browsers not found, installing now...")
+        subprocess.run(["playwright", "install"], check=True)
+    else:
+        print("Playwright browsers already installed, skipping install.")
+
 async def handle_scrape_and_llm(url, questions):
+    await ensure_playwright_browsers_installed()
     from playwright.async_api import async_playwright
     SCRAPED_FILE = "scraped_content.html"
     async with async_playwright() as p:
