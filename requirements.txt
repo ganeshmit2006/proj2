@@ -1,0 +1,11 @@
+fastapi
+starlette
+uvicorn
+duckdb
+beautifulsoup4
+google-generativeai
+playwright
+pandas
+numpy
+matplotlib
+PyPDF2
