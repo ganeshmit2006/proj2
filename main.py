@@ -304,6 +304,11 @@ Input text:
 from typing import List
 from fastapi import File, UploadFile
 
+@app.get("/api/", response_class=PlainTextResponse)
+async def health_check():
+    """Health check endpoint for deployment verification"""
+    return "Data Analyst API is healthy"
+
 @app.post("/api/")
 async def analyze(request: Request):
     """
