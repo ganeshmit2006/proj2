@@ -1,7 +1,6 @@
 import os
 import subprocess
 from pathlib import Path
-from playwright.async_api import async_playwright
 import traceback
 import json
 import re
@@ -19,6 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.datastructures import UploadFile as StarletteUploadFile
 from fastapi.responses import PlainTextResponse
 import base64
+import requests
 
 import duckdb
 from bs4 import BeautifulSoup
@@ -133,32 +133,17 @@ def extract_page_text(html):
     # Optionally only grab largest visible block or main section here
     return text
 
-PLAYWRIGHT_BROWSERS_PATH = Path.home() / ".cache/ms-playwright"
-
-async def ensure_playwright_browsers_installed():
-    # Check if Chromium headless shell executable exists already
-    chromium_path = PLAYWRIGHT_BROWSERS_PATH / "chromium_headless_shell-1181" / "chrome-linux" / "headless_shell"
-    if not chromium_path.exists():
-        print("Playwright browsers not found, installing now...")
-        subprocess.run(["playwright", "install"], check=True)
-    else:
-        print("Playwright browsers already installed, skipping install.")
-
-async def handle_scrape_and_llm(url, questions):
-    await ensure_playwright_browsers_installed()
-    from playwright.async_api import async_playwright
-    SCRAPED_FILE = "scraped_content.html"
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        page = await browser.new_page()
-        await page.goto(url, wait_until="domcontentloaded", timeout=60000)
-        content = await page.content()
-        with open(SCRAPED_FILE, "w", encoding="utf-8") as f:
-            f.write(content)
-        await browser.close()
-
-    with open(SCRAPED_FILE, encoding="utf-8") as f:
-        html = f.read()
+def handle_scrape_and_llm(url, questions):
+    """
+    Download a web page and answer questions using Gemini and table/text extraction.
+    This version does NOT use Playwright.
+    """
+    try:
+        resp = requests.get(url, timeout=30)
+        resp.raise_for_status()
+        html = resp.text
+    except Exception as e:
+        raise RuntimeError(f"Failed to download {url}: {e}")
 
     def extract_table_data(html):
         soup = BeautifulSoup(html, "html.parser")
@@ -188,16 +173,16 @@ async def handle_scrape_and_llm(url, questions):
                 "headers": tdata if tdata else [],
             })
         return {"num_tables": len(tables_data), "tables": metas}
-
+    
+    # === Keep your original table/text extraction functions ===
     tables_data = extract_table_data(html)
     meta = extract_table_metadata(tables_data)
-
-    # Add: Fallback to visible page text if no tables are extracted
     page_text = None
     if not tables_data or all(len(tbl) == 0 for tbl in tables_data):
         page_text = extract_page_text(html)
 
     prompt = build_agent_prompt(url, tables_data, meta, questions, page_text)
+
     llm_raw = call_gemini(prompt)
     print("Prompt to Gemini:", prompt)
     print("Raw response from Gemini:", repr(llm_raw))
@@ -423,7 +408,8 @@ async def analyze(request: Request):
             results = handle_duckdb_analytics(main_data["s3_path"], main_data["questions"])
             return JSONResponse(content=results)
         elif "url" in main_data and "questions" in main_data:
-            results = await handle_scrape_and_llm(main_data["url"], main_data["questions"])
+            #results = await handle_scrape_and_llm(main_data["url"], main_data["questions"])
+            results = handle_scrape_and_llm(main_data["url"], main_data["questions"])
             # Attach helper file results for answer context
             context = {k:v for k,v in parsed_files.items() if v and k != 'body' and k != filename}
             return JSONResponse(content={"results": results})
