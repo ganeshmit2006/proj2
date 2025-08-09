@@ -14,6 +14,7 @@ from fastapi import File, UploadFile
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.datastructures import UploadFile as StarletteUploadFile
+from fastapi.responses import PlainTextResponse
 import base64
 
 import duckdb

@@ -10,3 +10,5 @@ numpy
 matplotlib
 PyPDF2
 numpy
+python-multipart
+
