@@ -3,7 +3,5 @@
 *.jpg
 *.jpeg
 *.pdf
-*.html
-*.txt
 __pycache__/
 *.ipynb
