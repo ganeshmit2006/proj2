@@ -1,0 +1,9 @@
+{
+  "url": "https://www.bbc.com/weather/1264527",
+    "questions": [
+    "What is the minimum temp today",
+    "What is the average temp over last 5 days?",
+    "refer to IMAGE.PNG in input,   Return as a base-64 encoded data URI, `data:image/png;base64,iVBORw0KG...` under 100,000 bytes.",
+    "what is the ISIN of symbol - \"SGBJUN28\" from 20250729_NSE.csv file input?"
+  ]
+}

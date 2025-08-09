@@ -1,0 +1,46 @@
+{
+  "id": "chatcmpl-C0Zpw6nh6AWDHTBD3H10Ip87poNdv",
+  "object": "chat.completion",
+  "created": 1754253792,
+  "model": "gpt-4o-mini-2024-07-18",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [
+          {
+            "id": "call_F0mTOYpKF8BsrAM7BFYMmYOa",
+            "type": "function",
+            "function": {
+              "name": "get_relevant_data",
+              "arguments": "{\"file_name\":\"scraped_content.html\",\"js_selector\":\".film-collection[data-collection='$2 billion']\"}"
+            }
+          }
+        ],
+        "refusal": null,
+        "annotations": []
+      },
+      "logprobs": null,
+      "finish_reason": "tool_calls"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 160,
+    "completion_tokens": 35,
+    "total_tokens": 195,
+    "prompt_tokens_details": {
+      "cached_tokens": 0,
+      "audio_tokens": 0
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 0,
+      "audio_tokens": 0,
+      "accepted_prediction_tokens": 0,
+      "rejected_prediction_tokens": 0
+    }
+  },
+  "service_tier": "default",
+  "system_fingerprint": "fp_62a23a81ef"
+}
