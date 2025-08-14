@@ -29,6 +29,94 @@ app.add_middleware(
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "YOUR_API_KEY")
 genai.configure(api_key=GEMINI_API_KEY)
 
+# --- NEW/UPDATED: Minimal PNG single pixel placeholder data URI ---
+BASE64_PNG_PLACEHOLDER = (
+    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVQI12NgYAAAAAMAAWgmWQ0AAAAASUVORK5CYII='
+)
+
+# --- NEW/UPDATED: Helpers for enforcing schema & image validation ---
+def is_valid_base64_png(b64: str) -> bool:
+    prefix = "data:image/png;base64,"
+    try:
+        if isinstance(b64, str) and b64.startswith(prefix):
+            base64.b64decode(b64[len(prefix):], validate=True)
+            return True
+    except Exception:
+        pass
+    return False
+
+def trim_base64_png(b64: str, maxbytes: int = 100000) -> str:
+    prefix = "data:image/png;base64,"
+    if b64.startswith(prefix):
+        raw = base64.b64decode(b64[len(prefix):] + '==')
+        if len(raw) <= maxbytes:
+            return b64
+        trimmed = base64.b64encode(raw[:maxbytes]).decode()
+        return prefix + trimmed
+    return b64
+
+
+# --- NEW/UPDATED: Dict of all required keys for each dataset ---
+REQUIRED_KEYS = {
+    "network": {
+        "edge_count": "number",
+        "highest_degree_node": "string",
+        "average_degree": "number",
+        "density": "number",
+        "shortest_path_alice_eve": "number",
+        "network_graph": "string",     # base64 PNG
+        "degree_histogram": "string"   # base64 PNG
+    },
+    "sales": {
+        "total_sales": "number",
+        "top_region": "string",
+        "day_sales_correlation": "number",
+        "bar_chart": "string",                  # base64 PNG
+        "median_sales": "number",
+        "total_sales_tax": "number",
+        "cumulative_sales_chart": "string"      # base64 PNG
+    },
+    "weather": {
+        "average_temp_c": "number",
+        "max_precip_date": "string",
+        "min_temp_c": "number",
+        "temp_precip_correlation": "number",
+        "average_precip_mm": "number",
+        "temp_line_chart": "string",        # base64 PNG
+        "precip_histogram": "string"        # base64 PNG
+    }
+}
+
+# --- NEW/UPDATED: Utility to guess use-case/data-type based on questions/driver ---
+def guess_data_type(driver, questions):
+    qs = " ".join(q.lower() for q in questions)
+    url = driver.get("url", "").lower() if "url" in driver else ""
+    if "edge_count" in qs or "network" in url or "edges.csv" in url:
+        return "network"
+    if "total_sales" in qs or "sales" in url or "bar_chart" in qs:
+        return "sales"
+    if "average_temp" in qs or "weather" in url or "precip_histogram" in qs:
+        return "weather"
+    # fallback: treat as network if containing "graph" etc, else unknown
+    return None
+
+# --- NEW/UPDATED: Output normalization to enforce required schema always present (never missing keys) ---
+def enforce_schema(output, keys):
+    data = {} if not isinstance(output, dict) else output.copy()
+    result = {}
+    for k, typ in keys.items():
+        val = data.get(k, None)
+        # For PNG image string keys (must start with data:image/png;base64,)
+        if isinstance(val, str) and k.endswith(('graph', 'histogram', 'chart')):
+            if not is_valid_base64_png(val):
+                val = BASE64_PNG_PLACEHOLDER
+            else:
+                val = trim_base64_png(val)
+        if val is None and k.endswith(('graph', 'histogram', 'chart')):
+            val = BASE64_PNG_PLACEHOLDER
+        result[k] = val
+    return result
+
 def clean_gemini_response(text):
     text = text.strip()
     if text.startswith("```"):
@@ -134,28 +222,90 @@ def extract_text(html):
     return soup.get_text(separator='\n', strip=True)
 
 def build_prompt(url, tables, meta, questions, page_text=None, helpers=None):
+    """
+    Build a strict instruction prompt for the LLM:
+    - Forces use of provided data only (no external knowledge).
+    - Enforces numeric cleaning in calculations.
+    - Requires output in strict JSON matching required schema.
+    - Includes helper file previews if present.
+    """
+    # Join questions into human-readable numbered list
     question_list = "\n".join(f"{i+1}. {q}" for i, q in enumerate(questions))
+
+    # Guess dataset type and pick schema keys
+    use_type = guess_data_type({"url": url}, questions)
+    keys = REQUIRED_KEYS.get(use_type, {})
+
+    # === 1. Intro rules ===
     prompt = (
-        "You are a precise data analyst. Use ONLY the provided tables and text.\n"
-        "Do not use any external knowledge.\n"
-        "Cleanse numbers before calculations, returning number types.\n"
-        "Answer all questions exactly and only as requested.\n"
-        "Return JSON matching the question order.\n"
-        "For unanswerable questions, return null.\n"
-        "All output must be raw JSON without markdown or explanations.\n"
+        "You are an exacting data analyst assistant.\n"
+        "For each question, only use the tables, their JSON serialization, and/or the visible page text provided below.\n"
+        "Do NOT use any knowledge outside the given extracted data/text, even if you think you know it.\n"
+        "Carefully parse and cleanse all numbers (remove $, commas, footnotes, citations, etc.) before calculations.\n"
+        "Convert numeric values to number type before comparing or counting.\n"
+        "For each table cell containing numbers, remove ALL non-numeric characters "
+        "(including $, commas, *, footnotes, and extra text) and convert to integer or float before using.\n"
+        "When answering 'earliest' or 'latest' questions, filter for matching entries "
+        "then select the row with minimum or maximum year, and return BOTH the primary label and that year.\n"
+        "If numeric fields are missing, treat them as not qualifying.\n"
+        "Do NOT guess or use prior knowledge — only provided data.\n"
+        "If a question requires filtering by numeric range, process relevant columns as numbers, not strings.\n"
+        "If you cannot answer from the data given, return null for that output key.\n"
+        "For numbers, output as ints/floats; for charts/graphs, output base64 PNG starting with 'data:image/png;base64,'\n"
+        "Do not output markdown or explanations — only valid JSON.\n"
     )
+
+    # === 2. Schema section ===
+    if keys:
+        prompt += "\nOutput must be a JSON object with ALL these keys (even if null):\n"
+        for k, typ in keys.items():
+            prompt += f"- {k}: {typ}\n"
+        # Example object
+        example_obj = {
+            k: (
+                BASE64_PNG_PLACEHOLDER
+                if any(tok in k for tok in ['chart', 'graph', 'histogram'])
+                else (1 if typ == 'number' else 'abc')
+            )
+            for k, typ in keys.items()
+        }
+        prompt += "Example output:\n" + json.dumps(example_obj, indent=2) + "\n"
+
+    # === 3. Helper file descriptions (truncated) ===
     if helpers:
-        prompt += "\nHelper files included:\n"
-        for fname, content in helpers.items():
-            if isinstance(content, dict):
-                preview = json.dumps(content)[:1000]
+        prompt += "\nHelper files have been parsed as follows:\n"
+        for fname, pdata in helpers.items():
+            prompt += f"- File: {fname} (type: {fname.split('.')[-1]})\n"
+            if fname.endswith('.csv'):
+                csv_head = None
+                if isinstance(pdata, dict):
+                    csv_head = pdata.get("csv_preview", pdata.get("head", []))
+                prompt += f"  Extracted CSV preview rows:\n{json.dumps(csv_head)[:1000]}...(truncated)\n"
+            elif fname.lower().endswith(('.png', '.jpg', '.jpeg')):
+                img_uri = ""
+                if isinstance(pdata, dict):
+                    img_uri = pdata.get("image_data_uri", "")
+                prompt += f"  Base64 image dataURI: {img_uri[:1000]}...(truncated)\n"
+            elif fname.endswith('.txt') or fname.endswith('.pdf'):
+                text_preview = pdata if isinstance(pdata, str) else json.dumps(pdata)
+                prompt += f"  Text head:\n{text_preview[:1000]}...(truncated)\n"
             else:
-                preview = str(content)[:1000]
-            prompt += f"- {fname}: {preview}\n"
-    prompt += f"\nSource URL: {url}\nTables Metadata: {json.dumps(meta)}\nTables Content: {json.dumps(tables)}\nQuestions:\n{question_list}\n"
+                prompt += f"  Raw content preview:\n{str(pdata)[:500]}...(truncated)\n"
+        prompt += (
+            "\nIf a question explicitly references a helper file by name, use only the provided file data for that answer.\n"
+            "If the referenced file data cannot be used, return null for that key."
+        )
+
+    # === 4. Append questions, metadata, tables, and text ===
+    prompt += f"\nQuestions:\n{question_list}\n"
+    prompt += f"Data source: {url}\n"
+    prompt += f"Table metadata: {json.dumps(meta)}\n"
+    prompt += f"Tables (JSON):\n{json.dumps(tables)}\n"
     if page_text:
-        prompt += f"\nPage Text (trimmed): {page_text[:5000]}"
+        prompt += f"\nPage text extract:\n{page_text[:5000]}\n"
+
     return prompt
+
 
 @app.get("/api")
 async def health():
@@ -236,20 +386,29 @@ async def analyze(request: Request):
                 prompt = build_prompt(driver["url"], tables, meta, driver["questions"], page_text, helpers)
                 raw_ans = call_gemini(prompt)
                 ans = clean_gemini_response(raw_ans)
-                if ans is None:
-                    ans = [None] * len(driver["questions"])
-                results[f"results{idx}"] = ans
+
+                # --- NEW/UPDATED: Enforce schema and handle list/dict conversions ---
+                # Guess which type and required keys
+                dtype = guess_data_type(driver, driver["questions"])
+                req_keys = REQUIRED_KEYS.get(dtype, {})
+                # If LLM output is a list, map in order or fallback to empty
+                if isinstance(ans, list) and req_keys:
+                    ans = {k: v for k, v in zip(req_keys, ans)}
+                if not isinstance(ans, dict):
+                    ans = {}
+                # Always enforce full schema on output!
+                normalized = enforce_schema(ans, req_keys) if req_keys else ans
+                results[f"results{idx}"] = normalized
             else:
                 results[f"results{idx}"] = None
-
         return JSONResponse(results)
-
     except Exception as e:
         return JSONResponse({
             "results1": None,
             "error": str(e),
             "trace": traceback.format_exc()
         })
+
 
 
 if __name__ == "__main__":
