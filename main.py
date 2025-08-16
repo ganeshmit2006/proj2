@@ -30,8 +30,11 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "YOUR_API_KEY")
 genai.configure(api_key=GEMINI_API_KEY)
 
 # --- NEW/UPDATED: Minimal PNG single pixel placeholder data URI ---
+
 BASE64_PNG_PLACEHOLDER = (
-    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVQI12NgYAAAAAMAAWgmWQ0AAAAASUVORK5CYII='
+    "data:image/png;base64,"
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR"
+    "42mP8z8BQDwAFigJ/l8K2bQAAAABJRU5ErkJggg=="
 )
 
 # --- NEW/UPDATED: Helpers for enforcing schema & image validation ---
@@ -88,34 +91,33 @@ REQUIRED_KEYS = {
 }
 
 # --- NEW/UPDATED: Utility to guess use-case/data-type based on questions/driver ---
-def guess_data_type(driver, questions):
-    qs = " ".join(q.lower() for q in questions)
-    url = driver.get("url", "").lower() if "url" in driver else ""
-    if "edge_count" in qs or "network" in url or "edges.csv" in url:
+def guess_dataset_type(driver, questions):
+    text = " ".join(q.lower() for q in questions)
+    url = (driver.get("url") or "").lower()
+    if any(x in url for x in ["network", "edge"]) or "edge_count" in text:
         return "network"
-    if "total_sales" in qs or "sales" in url or "bar_chart" in qs:
+    if any(x in url for x in ["sales"]) or "total_sales" in text:
         return "sales"
-    if "average_temp" in qs or "weather" in url or "precip_histogram" in qs:
+    if any(x in url for x in ["weather"]) or "average_temp" in text:
         return "weather"
-    # fallback: treat as network if containing "graph" etc, else unknown
     return None
 
 # --- NEW/UPDATED: Output normalization to enforce required schema always present (never missing keys) ---
-def enforce_schema(output, keys):
-    data = {} if not isinstance(output, dict) else output.copy()
+
+def enforce_schema(output: dict, required_keys: dict) -> dict:
     result = {}
-    for k, typ in keys.items():
-        val = data.get(k, None)
-        # For PNG image string keys (must start with data:image/png;base64,)
-        if isinstance(val, str) and k.endswith(('graph', 'histogram', 'chart')):
+    for key, typ in required_keys.items():
+        val = output.get(key)
+        if key.endswith(("graph", "chart", "histogram")):
             if not is_valid_base64_png(val):
                 val = BASE64_PNG_PLACEHOLDER
             else:
                 val = trim_base64_png(val)
-        if val is None and k.endswith(('graph', 'histogram', 'chart')):
-            val = BASE64_PNG_PLACEHOLDER
-        result[k] = val
+        if val is None:
+            val = BASE64_PNG_PLACEHOLDER if key.endswith(("graph", "chart", "histogram")) else None
+        result[key] = val
     return result
+
 
 def clean_gemini_response(text):
     text = text.strip()
@@ -233,7 +235,7 @@ def build_prompt(url, tables, meta, questions, page_text=None, helpers=None):
     question_list = "\n".join(f"{i+1}. {q}" for i, q in enumerate(questions))
 
     # Guess dataset type and pick schema keys
-    use_type = guess_data_type({"url": url}, questions)
+    use_type = guess_dataset_type({"url": url}, questions)
     keys = REQUIRED_KEYS.get(use_type, {})
 
     # === 1. Intro rules ===
@@ -389,7 +391,7 @@ async def analyze(request: Request):
 
                 # --- NEW/UPDATED: Enforce schema and handle list/dict conversions ---
                 # Guess which type and required keys
-                dtype = guess_data_type(driver, driver["questions"])
+                dtype = guess_dataset_type(driver, driver["questions"])
                 req_keys = REQUIRED_KEYS.get(dtype, {})
                 # If LLM output is a list, map in order or fallback to empty
                 if isinstance(ans, list) and req_keys:
@@ -399,8 +401,8 @@ async def analyze(request: Request):
                 # Always enforce full schema on output!
                 normalized = enforce_schema(ans, req_keys) if req_keys else ans
                 results[f"results{idx}"] = normalized
-            else:
-                results[f"results{idx}"] = None
+                continue
+            results[f"results{idx}"] = None
         return JSONResponse(results)
     except Exception as e:
         return JSONResponse({
@@ -414,4 +416,3 @@ async def analyze(request: Request):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=81)
-

@@ -10,3 +10,7 @@ beautifulsoup4
 playwright
 duckdb
 google-generativeai
+json
+base64
+asyncio
+traceback
