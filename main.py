@@ -212,7 +212,7 @@ async def analyze(request: Request):
             uploaded_files["body.txt"] = content
 
         if not uploaded_files:
-            return JSONResponse({"results1": None, "error": "No files uploaded"})
+            return JSONResponse({"error": "No files uploaded"})
 
         prompt = build_flexible_llm_prompt(uploaded_files)
         print("==== LLM PROMPT ====")
@@ -225,11 +225,15 @@ async def analyze(request: Request):
         print(raw_ans)
         print("======================")
 
-        return JSONResponse({"results1": ans})
+        # Unwrap "results1" if present at the top level
+        if isinstance(ans, dict) and "results1" in ans:
+            ans = ans["results1"]
+        if ans is None:
+            return JSONResponse({"answers": None, "error": "No valid answer from model"})
+        return JSONResponse(ans)
 
     except Exception as e:
         return JSONResponse({
-            "results1": None,
             "error": str(e),
             "trace": traceback.format_exc()
         })
