@@ -29,7 +29,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "YOUR_API_KEY")
 genai.configure(api_key=GEMINI_API_KEY)
 
 # ------------- UPDATED: Dynamic base64 image sanitization function -------------
-def sanitize_base64_images(obj, max_chars=137000):
+def sanitize_base64_images(obj, max_chars=100000):
     """
     Scan all dict keys for likely base64-encoded PNG/JPEG/GIF images
     and set oversized strings to "TOO_LARGE".
@@ -102,6 +102,14 @@ def clean_gemini_response(text):
             return arr
         except Exception:
             pass
+     # === MINIMAL PATCH: Final fallback parses raw text as JSON ===
+    try:
+        obj = json.loads(text)
+        obj = sanitize_base64_images(obj)
+        return obj
+    except Exception:
+        pass
+    # === END PATCH ===
 
     print("clean_gemini_response: Failed to extract JSON, raw LLM output:", text)
     if "Cannot answer with provided files" in text:
